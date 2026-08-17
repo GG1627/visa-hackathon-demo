@@ -4,8 +4,8 @@ import { cn } from "@/lib/utils";
 
 const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, React.ComponentPropsWithoutRef<typeof SliderPrimitive.Root>>(({ className, ...props }, ref) => (
   <SliderPrimitive.Root ref={ref} className={cn("relative flex w-full touch-none select-none items-center", className)} {...props}>
-    <SliderPrimitive.Track className="relative h-2 w-full grow overflow-hidden rounded-full bg-indigo-100"><SliderPrimitive.Range className="absolute h-full bg-gradient-to-r from-indigo-500 to-violet-500" /></SliderPrimitive.Track>
-    <SliderPrimitive.Thumb className="block h-5 w-5 rounded-full border-[3px] border-white bg-indigo-600 shadow-md ring-offset-background transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 hover:scale-110" />
+    <SliderPrimitive.Track className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-white/10"><SliderPrimitive.Range className="absolute h-full bg-[#3A5BFF]" /></SliderPrimitive.Track>
+    <SliderPrimitive.Thumb className="block h-5 w-5 rounded-full border-[5px] border-[#111634] bg-[#F7B500] shadow-[0_4px_14px_-4px_rgba(0,0,0,.75),0_0_0_1px_rgba(247,181,0,.35)] ring-offset-[#0A0E27] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3A5BFF]/50 focus-visible:ring-offset-2 hover:scale-110" />
   </SliderPrimitive.Root>
 ));
 Slider.displayName = SliderPrimitive.Root.displayName;
