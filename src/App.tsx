@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { SiVisa } from "react-icons/si";
 import {
   AlertCircle, ArrowRight, ArrowRightLeft, BadgeCheck, Check, CheckCircle2, ChefHat, ChevronDown, ChevronUp, CircleDollarSign,
-  Coffee, CreditCard, CupSoda, Droplets, ExternalLink, Eye, Gauge, LoaderCircle, LockKeyhole,
+  Coffee, CreditCard, CupSoda, Download, Droplets, ExternalLink, Eye, Gauge, LoaderCircle, LockKeyhole,
   Network, PackageCheck, PackageOpen, Palette, Play, RefreshCw, RotateCcw, ScanLine, Scissors,
   ShieldCheck, Store, TableProperties, Tags, TentTree, Wheat,
   XCircle, Zap,
@@ -16,12 +17,12 @@ import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { getPaidPrice, getTotalSpent, money, scenarios, type Category, type Scenario } from "@/data";
+import { createProcurementRun, money, scenarios, type Category, type ProcurementRun, type Scenario } from "@/data";
 
 type Screen = "landing" | "auth" | "priority" | "live" | "summary";
 type AuthIntent = "pass" | "fail";
 type AgentStatus = "idle" | "searching" | "found" | "reserved" | "captured";
-type EventKind = "agent_started" | "products_found" | "item_purchased" | "rebalancing" | "complete";
+type EventKind = "agent_started" | "products_found" | "constraint" | "item_purchased" | "rebalancing" | "complete";
 type AgentEvent = { at: number; kind: EventKind; message: string; category?: number; status?: AgentStatus; label?: string };
 
 const icons: Record<Category["icon"], LucideIcon> = {
@@ -37,22 +38,6 @@ const agentThemes = [
   { accent: "text-emerald-300", border: "border-l-emerald-400", outline: "border-emerald-400", icon: "bg-emerald-400/10 text-emerald-300", line: "#34D399" },
 ] as const;
 
-const purchaseAddOns: Record<Category["icon"], [string, string]> = {
-  Coffee: ["Commercial portafilter starter set", "Water-line and cleaning kit"],
-  PackageOpen: ["Dial-in sample pack", "Airtight storage set"],
-  TentTree: ["Weighted anchor kit", "Weatherproof sidewall set"],
-  CupSoda: ["Compostable lids and sleeves", "Service and condiment organizers"],
-  CreditCard: ["Counter stand and charging cable", "Secure checkout activation"],
-  ChefHat: ["Baking tray starter set", "Heat-safe prep accessories"],
-  Wheat: ["Core dry-goods assortment", "Food-safe storage containers"],
-  Store: ["Display tray set", "Counter mounting hardware"],
-  Tags: ["Printed label assortment", "Food-safe packaging inserts"],
-  TableProperties: ["Non-slip grooming mat", "Restraint arm and loop set"],
-  Scissors: ["Blade and comb assortment", "Tool care and charging kit"],
-  Droplets: ["Coat-specific wash set", "Towels and sanitation supplies"],
-  Palette: ["Vehicle decal set", "Booking QR and contact signage"],
-};
-
 const screenMotion = {
   initial: { opacity: 0, y: 12 },
   animate: { opacity: 1, y: 0 },
@@ -61,8 +46,12 @@ const screenMotion = {
 };
 
 function MayaMark({ compact = false, inverse = false }: { compact?: boolean; inverse?: boolean }) {
-  return <div className="flex items-center">
-    <span className={cn("font-semibold tracking-[-.045em]", inverse ? "text-white" : "text-slate-950", compact ? "text-xl" : "text-2xl")}><span className={inverse ? "text-[#F7B500]" : "text-indigo-700"}>Visa</span> Maya</span>
+  return <div className="flex items-center" aria-label="Visa Maya">
+    <span className={cn("flex shrink-0 items-center justify-center", compact ? "h-9" : "h-10")}>
+      <SiVisa className={cn(inverse ? "text-white" : "text-[#1434CB]", compact ? "h-8 w-[88px]" : "h-9 w-[100px]")} aria-hidden="true" />
+    </span>
+    <span aria-hidden="true" className={cn("mx-3.5 h-7 w-px shrink-0", inverse ? "bg-white/25" : "bg-[#1434CB]/25")} />
+    <span className={cn("font-medium leading-none tracking-[-.035em]", inverse ? "text-white/92" : "text-[#0A0E27]", compact ? "text-xl" : "text-[22px]")}>Maya</span>
   </div>;
 }
 
@@ -215,28 +204,40 @@ function PriorityScreen({ scenario, allocations, setAllocations, onContinue }: {
   </motion.section>;
 }
 
-function buildEvents(scenario: Scenario): AgentEvent[] {
-  const c = scenario.categories;
+function buildEvents(run: ProcurementRun): AgentEvent[] {
   const events: AgentEvent[] = [];
-  [300, 900, 1500, 2100, 2700].forEach((at, i) => events.push({ at, kind: "agent_started", category: i, status: "searching", message: `Scanning approved suppliers and comparing live inventory.` }));
-  [3400, 4100, 4800, 5500, 6200].forEach((at, i) => events.push({ at, kind: "products_found", category: i, status: "found", message: `Shortlisted 3 candidates: ${c[i].candidates.join(", ")}` }));
-  [6900, 7500, 8100, 8700, 9300].forEach((at, i) => events.push({ at, kind: "item_purchased", category: i, status: "reserved", label: "RESERVED", message: `Reserved ${c[i].productName} — ${money(c[i].actualFound)}` }));
-  [10000, 10700, 11400, 12100].forEach((at, offset) => { const i = offset + 1; events.push({ at, kind: "item_purchased", category: i, status: "captured", label: "CAPTURED", message: `Captured ${c[i].productName} — ${money(c[i].actualFound)}` }); });
-  const sourceIndex = c.findIndex(item => item.isSurplusSource);
-  const targetIndex = c.findIndex(item => item.isUpgradeTarget);
-  const sourceSurplus = c[sourceIndex].estimatedAllocation - c[sourceIndex].actualFound;
-  const upgradeDelta = (c[targetIndex].upgradedPrice ?? c[targetIndex].actualFound) - c[targetIndex].actualFound;
-  events.push({ at: 12800, kind: "rebalancing", category: sourceIndex, message: `${c[sourceIndex].name} came in ${money(sourceSurplus)} under budget — reallocating surplus` });
-  events.push({ at: 13900, kind: "rebalancing", category: targetIndex, message: `${money(upgradeDelta)} surplus pool identified across the plan` });
-  events.push({ at: 15000, kind: "rebalancing", category: targetIndex, status: "reserved", label: "UPGRADED", message: `Upgrading ${c[targetIndex].name} to ${c[targetIndex].upgradedProductName} — ${money(c[targetIndex].upgradedPrice ?? 0)}` });
-  events.push({ at: 16300, kind: "item_purchased", category: targetIndex, status: "captured", label: "CAPTURED", message: `Captured ${c[targetIndex].upgradedProductName} — ${money(getPaidPrice(scenario, c[targetIndex]))}${scenario.checkoutCredit ? ` after ${money(scenario.checkoutCredit)} checkout credit` : ""}` });
-  events.push({ at: 17500, kind: "complete", message: `All 5 agents complete — ${money(getTotalSpent(scenario))} total captured` });
-  return events;
+  const startTimes = [300, 850, 1450, 2200, 3050];
+  const quoteTimes = [3150, 3750, 4550, 5650, 6800];
+  const reserveTimes = [7150, 7900, 8650, 9400, 10150];
+  run.orders.forEach((order, index) => {
+    const availableQuotes = order.quotes.filter(quote => quote.availability !== "unavailable");
+    const bestQuote = availableQuotes.reduce((best, quote) => quote.landedTotal < best.landedTotal ? quote : best);
+    events.push({ at: startTimes[index], kind: "agent_started", category: index, status: "searching", message: `Scanning approved suppliers and checking landed cost against a ${money(order.allocation)} working envelope.` });
+    events.push({ at: quoteTimes[index], kind: "products_found", category: index, status: "found", message: `${availableQuotes.length} viable quotes returned · best landed estimate ${money(bestQuote.landedTotal)} from ${bestQuote.merchant}.` });
+    if (order.preferredUnavailable) events.push({ at: quoteTimes[index] + 280, kind: "constraint", category: index, status: "searching", label: "STOCK CHANGE", message: `${order.quotes[0].name} went unavailable · switching to ${order.selectedProduct}.` });
+    events.push({ at: reserveTimes[index], kind: "item_purchased", category: index, status: "reserved", label: order.substituted ? "SUBSTITUTED" : order.upgraded ? "UPGRADE HELD" : "RESERVED", message: `${order.selectedMerchant} reserved ${order.selectedProduct} at ${money(order.capturedTotal)} landed.` });
+    if (!order.upgraded) events.push({ at: 10600 + index * 720, kind: "item_purchased", category: index, status: "captured", label: "CAPTURED", message: `Captured ${order.selectedProduct} · ${money(order.capturedTotal)} including fees and credits.` });
+  });
+  let eventTime = 14200;
+  run.transfers.forEach(transfer => {
+    const targetIndex = run.orders.findIndex(order => order.categoryName === transfer.to);
+    events.push({ at: eventTime, kind: "rebalancing", category: targetIndex >= 0 ? targetIndex : undefined, message: `Moved ${money(transfer.amount)} from ${transfer.from} to ${transfer.to}.` });
+    eventTime += 420;
+  });
+  const upgradeOrder = run.orders.find(order => order.upgraded);
+  if (upgradeOrder) {
+    events.push({ at: eventTime + 240, kind: "rebalancing", category: upgradeOrder.categoryIndex, status: "reserved", label: "UPGRADED", message: `Approved ${upgradeOrder.selectedProduct} after validating the pooled surplus and hard cap.` });
+    events.push({ at: eventTime + 1180, kind: "item_purchased", category: upgradeOrder.categoryIndex, status: "captured", label: "CAPTURED", message: `Captured upgraded order at ${money(upgradeOrder.capturedTotal)} · ${money(upgradeOrder.discount + upgradeOrder.credit)} in discounts and credits applied.` });
+    eventTime += 1180;
+  }
+  events.push({ at: eventTime + 1100, kind: "complete", message: `${run.orders.length} agents complete · ${money(run.totalSpent)} captured with ${money(run.remaining)} remaining.` });
+  return events.sort((a, b) => a.at - b.at);
 }
 
 const eventStyle: Record<EventKind, { icon: ComponentType<{ className?: string }>; className: string; label: string }> = {
   agent_started: { icon: Zap, className: "bg-cyan-400/10 text-cyan-300", label: "SEARCH" },
   products_found: { icon: Eye, className: "bg-[#3A5BFF]/15 text-[#8FA5FF]", label: "FOUND" },
+  constraint: { icon: AlertCircle, className: "bg-[#FF8BD8]/10 text-[#FF8BD8]", label: "CONSTRAINT" },
   item_purchased: { icon: PackageCheck, className: "bg-emerald-400/10 text-emerald-300", label: "ORDER" },
   rebalancing: { icon: ArrowRightLeft, className: "bg-[#F7B500]/10 text-[#F7B500]", label: "REBALANCE" },
   complete: { icon: CheckCircle2, className: "bg-[#2547EC] text-white", label: "COMPLETE" },
@@ -279,11 +280,11 @@ function ActivityLog({ events, scenario }: { events: AgentEvent[]; scenario: Sce
         const category = event.category === undefined ? undefined : scenario.categories[event.category];
         const theme = event.category === undefined ? agentThemes[0] : agentThemes[event.category];
         const agentName = category ? `${category.name} agent` : "Maya coordinator";
-        return <motion.div key={`${event.at}-${event.message}`} initial={{ x: -12 }} animate={{ x: 0 }} transition={{ duration: .4, ease: [.22, 1, .36, 1] }} className={cn("mb-3 border border-l-2 border-white/[.08] bg-white/[.03]", theme.border, event.kind === "rebalancing" && "border-[#F7B500]/30 bg-[#F7B500]/[.05]", event.kind === "complete" && "border-[#3A5BFF]/30 bg-[#3A5BFF]/[.08]")}>
+        return <motion.div key={`${event.at}-${event.message}`} initial={{ x: -12 }} animate={{ x: 0 }} transition={{ duration: .4, ease: [.22, 1, .36, 1] }} className={cn("mb-3 border border-l-2 border-white/[.08] bg-white/[.03]", theme.border, event.kind === "constraint" && "border-[#FF8BD8]/25 bg-[#FF8BD8]/[.045]", event.kind === "rebalancing" && "border-[#F7B500]/30 bg-[#F7B500]/[.05]", event.kind === "complete" && "border-[#3A5BFF]/30 bg-[#3A5BFF]/[.08]")}>
           <div className="flex items-start gap-3 px-4 py-3.5">
-            <div className={cn("mt-0.5 grid h-8 w-8 shrink-0 place-items-center", event.kind === "complete" ? style.className : theme.icon)}><Icon className="h-3.5 w-3.5" /></div>
+            <div className={cn("mt-0.5 grid h-8 w-8 shrink-0 place-items-center", event.kind === "complete" || event.kind === "constraint" ? style.className : theme.icon)}><Icon className="h-3.5 w-3.5" /></div>
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className={cn("text-xs font-semibold", event.kind === "rebalancing" ? "text-[#F7B500]" : theme.accent)}>{agentName}</span><span className="font-mono text-[8px] font-bold uppercase tracking-[.14em] text-white/30">{event.label ?? style.label}</span></div>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className={cn("text-xs font-semibold", event.kind === "rebalancing" ? "text-[#F7B500]" : event.kind === "constraint" ? "text-[#FF8BD8]" : theme.accent)}>{agentName}</span><span className="font-mono text-[8px] font-bold uppercase tracking-[.14em] text-white/30">{event.label ?? style.label}</span></div>
               <p className="mt-1.5 text-xs leading-5 text-white/62 sm:text-sm">{event.message}</p>
             </div>
             <span className="shrink-0 font-mono text-[9px] text-white/20">T+{(event.at / 1000).toFixed(1).padStart(4, "0")}s</span>
@@ -294,35 +295,33 @@ function ActivityLog({ events, scenario }: { events: AgentEvent[]; scenario: Sce
   </div>;
 }
 
-function PurchaseCards({ scenario, allocations, statuses }: { scenario: Scenario; allocations: number[]; statuses: AgentStatus[] }) {
+function PurchaseCards({ run, statuses }: { run: ProcurementRun; statuses: AgentStatus[] }) {
   const [expanded, setExpanded] = useState<number | null>(0);
-  const spent = scenario.categories.reduce((sum, c, i) => sum + (statuses[i] === "captured" ? getPaidPrice(scenario, c) : 0), 0);
-  return <div><div className="mb-5 flex items-center justify-between border border-white/10 bg-[#111634]/75 p-4"><div><p className="operational-label">Captured so far</p><p className="mt-1 text-2xl font-semibold tracking-tight text-white">{money(spent)} <span className="text-sm font-normal text-white/35">/ {money(scenario.totalBudget)}</span></p></div><Progress value={(spent / scenario.totalBudget) * 100} className="w-36 sm:w-56" indicatorClassName="bg-emerald-400" /></div>
-    <div className="grid items-start gap-3 lg:grid-cols-2">{scenario.categories.map((category, i) => {
-      const Icon = icons[category.icon];
+  const spent = run.orders.reduce((sum, order, index) => sum + (statuses[index] === "captured" ? order.capturedTotal : 0), 0);
+  return <div><div className="mb-5 flex items-center justify-between border border-white/10 bg-[#111634]/75 p-4"><div><p className="operational-label">Captured so far</p><p className="mt-1 text-2xl font-semibold tracking-tight text-white">{money(spent)} <span className="text-sm font-normal text-white/35">/ {money(run.budget)}</span></p></div><Progress value={(spent / run.budget) * 100} className="w-36 sm:w-56" indicatorClassName="bg-emerald-400" /></div>
+    <div className="grid items-start gap-3 lg:grid-cols-2">{run.orders.map((order, i) => {
+      const Icon = icons[order.icon];
       const done = statuses[i] === "captured";
-      const paid = getPaidPrice(scenario, category);
-      const upgraded = category.isUpgradeTarget && done;
       const isExpanded = expanded === i;
-      const selectedName = upgraded ? category.upgradedProductName : category.productName;
-      const addOns = purchaseAddOns[category.icon];
-      return <Card key={category.name} className={cn("shadow-none transition-all", done ? "border-emerald-400/15 bg-emerald-400/[.04]" : "border-white/[.08] bg-white/[.025]", i === 4 && "lg:col-span-2")}>
+      const delta = order.allocation - order.capturedTotal;
+      const result = order.upgraded ? "Upgraded" : order.substituted ? "Substituted" : delta > 0 ? `${money(delta)} under` : delta < 0 ? "Reallocated" : "On budget";
+      return <Card key={order.categoryName} className={cn("shadow-none transition-all", done ? "border-emerald-400/15 bg-emerald-400/[.04]" : "border-white/[.08] bg-white/[.025]", i === 4 && "lg:col-span-2")}>
         <button type="button" aria-expanded={isExpanded} onClick={() => setExpanded(isExpanded ? null : i)} className="flex w-full items-start gap-3 p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#3A5BFF]/50">
           <div className={cn("grid h-10 w-10 shrink-0 place-items-center", done ? "bg-emerald-400/10 text-emerald-300" : "bg-white/[.05] text-white/35")}><Icon className="h-4 w-4" /></div>
-          <div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold text-white">{category.name}</p><p className={cn("mt-1 truncate text-xs", done ? "text-white/50" : "text-white/25")}>{done ? selectedName : "Awaiting capture…"}</p></div><div className="flex items-center gap-2"><span className={cn("px-2 py-1 font-mono text-[8px] font-bold uppercase tracking-wider", upgraded ? "bg-[#F7B500]/10 text-[#F7B500]" : done && paid < allocations[i] ? "bg-emerald-400/10 text-emerald-300" : "bg-white/[.05] text-white/35")}>{upgraded ? "Upgraded" : done && paid < allocations[i] ? "Under budget" : statuses[i]}</span><ChevronDown className={cn("h-4 w-4 text-white/30 transition-transform", isExpanded && "rotate-180 text-white/65")} /></div></div>
-            <div className="mt-3 flex gap-6 border-t border-white/[.08] pt-3 text-xs"><div><span className="text-white/35">Allocated</span><strong className="ml-2 text-white/75">{money(allocations[i])}</strong></div><div><span className="text-white/35">Spent</span><strong className="ml-2 text-white/75">{done ? money(paid) : "—"}</strong></div></div>
+          <div className="min-w-0 flex-1"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-sm font-semibold text-white">{order.categoryName}</p><p className={cn("mt-1 truncate text-xs", done ? "text-white/50" : "text-white/25")}>{done ? order.selectedProduct : "Awaiting capture…"}</p></div><div className="flex shrink-0 items-center gap-2"><span className={cn("px-2 py-1 font-mono text-[8px] font-bold uppercase tracking-wider", order.upgraded ? "bg-[#F7B500]/10 text-[#F7B500]" : order.substituted ? "bg-[#FF8BD8]/10 text-[#FF8BD8]" : done && delta > 0 ? "bg-emerald-400/10 text-emerald-300" : done && delta < 0 ? "bg-[#3A5BFF]/15 text-[#8FA5FF]" : "bg-white/[.05] text-white/35")}>{done ? result : statuses[i]}</span><ChevronDown className={cn("h-4 w-4 text-white/30 transition-transform", isExpanded && "rotate-180 text-white/65")} /></div></div>
+            <div className="mt-3 flex gap-6 border-t border-white/[.08] pt-3 text-xs"><div><span className="text-white/35">Allocated</span><strong className="ml-2 text-white/75">{money(order.allocation)}</strong></div><div><span className="text-white/35">Captured</span><strong className="ml-2 text-white/75">{done ? money(order.capturedTotal) : "—"}</strong></div></div>
           </div>
         </button>
         <AnimatePresence initial={false}>{isExpanded && <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden"><div className="border-t border-white/[.08] px-4 py-4">
-          <p className="operational-label mb-3">{done ? "Secured in this category" : "Order contents"}</p>
-          {done ? <div className="space-y-2.5">{[selectedName, ...addOns].map((item, itemIndex) => <div key={item} className="flex items-center gap-3 text-xs"><CheckCircle2 className={cn("h-3.5 w-3.5 shrink-0", itemIndex === 0 ? "text-emerald-300" : "text-[#8FA5FF]")} /><span className="min-w-0 flex-1 text-white/62">{item}</span><span className={cn("font-mono text-[9px] uppercase tracking-wider", itemIndex === 0 ? "text-white/70" : "text-white/30")}>{itemIndex === 0 ? money(paid) : "Included"}</span></div>)}</div> : <p className="text-xs leading-5 text-white/35">Maya is still validating the selected bundle. Final line items appear here as soon as the capture completes.</p>}
+          {done ? <><div className="mb-3 flex items-center justify-between gap-3"><div><p className="operational-label">Landed cost</p><p className="mt-1 text-xs text-white/45">{order.selectedMerchant} · {order.quotes.filter(quote => quote.availability !== "unavailable").length} viable quotes</p></div>{order.preferredUnavailable && <span className="bg-[#FF8BD8]/10 px-2 py-1 font-mono text-[8px] font-bold uppercase tracking-wider text-[#FF8BD8]">Stock changed</span>}</div><div className="space-y-2.5">{order.lineItems.map(item => <div key={`${item.kind}-${item.label}`} className="flex items-center gap-3 text-xs"><CheckCircle2 className={cn("h-3.5 w-3.5 shrink-0", item.amount < 0 ? "text-[#F7B500]" : "text-[#8FA5FF]")} /><span className="min-w-0 flex-1 text-white/62">{item.label}</span><span className={cn("font-mono text-[9px]", item.amount < 0 ? "text-[#F7B500]" : "text-white/60")}>{item.amount < 0 ? `−${money(Math.abs(item.amount))}` : money(item.amount)}</span></div>)}</div><div className="mt-4 flex items-center justify-between border-t border-white/[.08] pt-3 text-xs"><span className="font-semibold text-white/65">Captured total</span><strong className="text-sm text-white">{money(order.capturedTotal)}</strong></div></> : <p className="text-xs leading-5 text-white/35">Maya is validating inventory, landed cost, and merchant terms. The final receipt appears here after capture.</p>}
         </div></motion.div>}</AnimatePresence>
       </Card>;
     })}</div></div>;
 }
 
-function LiveScreen({ scenario, allocations, onSummary }: { scenario: Scenario; allocations: number[]; onSummary: () => void }) {
-  const events = useMemo(() => buildEvents(scenario), [scenario]);
+function LiveScreen({ run, onSummary }: { run: ProcurementRun; onSummary: () => void }) {
+  const scenario = run.scenario;
+  const events = useMemo(() => buildEvents(run), [run]);
   const [visibleCount, setVisibleCount] = useState(0);
   useEffect(() => {
     const started = performance.now();
@@ -337,7 +336,7 @@ function LiveScreen({ scenario, allocations, onSummary }: { scenario: Scenario; 
   return <motion.section {...screenMotion} className="workspace-section mx-auto min-h-screen max-w-[1440px] px-4 pb-10 pt-24 sm:px-7">
     <div className="live-command-bar grid items-center gap-4 border-y border-white/10 bg-[#111634]/55 px-5 py-4 backdrop-blur-xl md:grid-cols-[1fr_auto_1fr] md:px-7">
       <div className="flex items-center justify-center gap-2 font-mono text-[9px] font-bold uppercase tracking-[.16em] text-[#F7B500] md:justify-start"><span className={cn("h-2 w-2 rounded-full", complete ? "bg-emerald-400" : "animate-pulse bg-[#3A5BFF]")} />{complete ? "Run complete" : `${activeCategories.length} agents working`}</div>
-      <div className="text-center"><h1 className="text-[clamp(2rem,3.4vw,3.25rem)] font-bold leading-[.92] tracking-[-.065em] text-white shadow-black/20 drop-shadow-sm">Autonomous <span className="text-[#F7B500]">procurement</span></h1><p className="mt-2 text-xs text-white/45">5 specialist agents · {money(scenario.totalBudget)} secured envelope</p></div>
+      <div className="text-center"><h1 className="text-[clamp(2rem,3.4vw,3.25rem)] font-bold leading-[.92] tracking-[-.065em] text-white shadow-black/20 drop-shadow-sm">Autonomous <span className="text-[#F7B500]">procurement</span></h1><p className="mt-2 text-xs text-white/45">{run.orders.length} specialist agents · {run.quoteCount} quotes · {money(run.budget)} secured envelope</p></div>
       <div className="mx-auto flex w-full max-w-[270px] items-center gap-3 md:mx-0 md:ml-auto"><Progress value={progress} className="bg-white/15" indicatorClassName="bg-[#3A5BFF]" /><span className="w-10 text-right font-mono text-[10px] font-bold tabular-nums text-white/45">{progress}%</span></div>
     </div>
     <Tabs defaultValue="activity" className="mt-5">
@@ -345,25 +344,247 @@ function LiveScreen({ scenario, allocations, onSummary }: { scenario: Scenario; 
         <AnimatePresence>{complete && <motion.div initial={{ opacity: 0, scale: .9 }} animate={{ opacity: 1, scale: 1 }}><Button onClick={onSummary} className="animate-soft-pulse">View summary <ArrowRight className="ml-2 h-4 w-4" /></Button></motion.div>}</AnimatePresence></div>
       <TabsContent value="activity"><div className="grid gap-5 xl:grid-cols-[.9fr_1.1fr]"><Card className="overflow-hidden"><CardHeader className="border-b border-white/[.08] pb-4"><div className="flex items-center justify-between"><div><CardTitle>Activity stream</CardTitle><CardDescription className="mt-1">Agent-attributed, timestamped actions</CardDescription></div><div className="flex items-center gap-2 border border-white/10 bg-white/[.05] px-3 py-1.5 font-mono text-[9px] font-bold uppercase tracking-wider text-white/40"><ScanLine className="h-3.5 w-3.5 text-[#8FA5FF]" /> live</div></div></CardHeader><CardContent className="p-4 pt-5"><ActivityLog events={visible} scenario={scenario} /></CardContent></Card>
         <Card className="overflow-hidden"><CardHeader className="border-b border-white/[.08] pb-4"><div className="flex items-center justify-between"><div><CardTitle>Agent network</CardTitle><CardDescription className="mt-1">Concurrent orchestration across every category</CardDescription></div><div className="flex -space-x-2">{scenario.categories.map((c, i) => { const Icon = icons[c.icon]; return <div key={c.name} className={cn("grid h-8 w-8 place-items-center rounded-full border-2 border-[#111634]", statuses[i] === "captured" ? "bg-emerald-500 text-white" : activeCategories.includes(i) ? agentThemes[i].icon : "bg-white/[.05] text-white/30")}><Icon className="h-3.5 w-3.5" /></div>; })}</div></div></CardHeader><CardContent className="p-2 sm:p-4"><AgentGraph scenario={scenario} statuses={statuses} activeCategories={complete ? [] : activeCategories} /></CardContent></Card></div></TabsContent>
-      <TabsContent value="purchases" className="purchase-ledger"><PurchaseCards scenario={scenario} allocations={allocations} statuses={statuses} /></TabsContent>
+      <TabsContent value="purchases" className="purchase-ledger"><PurchaseCards run={run} statuses={statuses} /></TabsContent>
     </Tabs>
   </motion.section>;
 }
 
-function SummaryScreen({ scenario, allocations, onRestart }: { scenario: Scenario; allocations: number[]; onRestart: () => void }) {
-  const spent = getTotalSpent(scenario); const remaining = scenario.totalBudget - spent;
-  const target = scenario.categories.find(c => c.isUpgradeTarget)!;
-  const redirect = (target.upgradedPrice ?? target.actualFound) - target.actualFound;
-  const chartData = scenario.categories.map((c, i) => ({ name: c.name.split(" ")[0], allocated: allocations[i], spent: getPaidPrice(scenario, c) }));
-  const donut = [{ name: "Spent", value: spent }, { name: "Remaining", value: remaining }];
-  return <motion.section {...screenMotion} className="workspace-section mx-auto min-h-screen max-w-[1280px] px-5 pb-16 pt-28 sm:px-8">
-    <div className="text-center"><motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 200, damping: 15 }} className="summary-seal mx-auto"><span className="summary-seal-ring" /><Check className="relative h-7 w-7 text-[#F7B500]" /></motion.div><div className="mt-5 font-mono text-[10px] font-bold uppercase tracking-[.22em] text-[#F7B500]">Procurement complete / 05 of 05</div><h1 className="workspace-title mx-auto mt-4">Your business is ready to move.</h1><p className="workspace-lede mx-auto mt-4 max-w-2xl">Maya sourced, optimized, and secured every item autonomously—inside your approved spend limit.</p></div>
-    <div className="mt-9 grid gap-5 lg:grid-cols-[.78fr_1.22fr]">
-      <Card><CardHeader><CardTitle>Budget performance</CardTitle><CardDescription>Approved budget vs. captured total</CardDescription></CardHeader><CardContent><div className="relative mx-auto h-52"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={donut} dataKey="value" innerRadius={65} outerRadius={88} startAngle={90} endAngle={-270} strokeWidth={0} isAnimationActive={false}>{donut.map((_, i) => <Cell key={i} fill={i === 0 ? "#3A5BFF" : "#293154"} />)}</Pie></PieChart></ResponsiveContainer><div className="absolute inset-0 grid place-content-center text-center"><span className="text-xs text-white/40">Total spent</span><strong className="text-3xl tracking-tight text-white">{money(spent)}</strong><span className="font-mono text-[9px] font-bold uppercase tracking-wider text-emerald-300">Within limit</span></div></div><div className="grid grid-cols-2 gap-3"><div className="rounded-[7px] border border-white/[.08] bg-white/[.035] p-4"><p className="text-xs text-white/40">Approved</p><p className="mt-1 text-lg font-semibold text-white">{money(scenario.totalBudget)}</p></div><div className="rounded-[7px] border border-emerald-400/15 bg-emerald-400/[.06] p-4"><p className="text-xs text-emerald-300/75">Unspent</p><p className="mt-1 text-lg font-semibold text-emerald-300">{money(remaining)}</p></div></div></CardContent></Card>
+const pdfSafe = (value: string) => value
+  .replace(/[—–]/g, "-")
+  .replace(/×/g, "x")
+  .replace(/·/g, " | ")
+  .replace(/’/g, "'")
+  .replace(/−/g, "-");
+
+async function downloadRunSummary(run: ProcurementRun) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "letter", compress: true });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 46;
+  const contentWidth = pageWidth - margin * 2;
+  let y = 0;
+
+  const addContinuationHeader = () => {
+    doc.setFillColor(10, 14, 39);
+    doc.rect(0, 0, pageWidth, 54, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(255, 255, 255);
+    doc.text("VISA | MAYA", margin, 33);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(170, 181, 220);
+    doc.text(`${run.id} | PROCUREMENT SUMMARY`, pageWidth - margin, 33, { align: "right" });
+    y = 78;
+  };
+
+  const ensureSpace = (height: number) => {
+    if (y + height <= pageHeight - 48) return;
+    doc.addPage();
+    addContinuationHeader();
+  };
+
+  const sectionTitle = (title: string, detail?: string) => {
+    ensureSpace(34);
+    doc.setFillColor(247, 181, 0);
+    doc.rect(margin, y - 9, 4, 13, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(10, 14, 39);
+    doc.text(title.toUpperCase(), margin + 12, y);
+    if (detail) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(104, 113, 145);
+      doc.text(pdfSafe(detail), pageWidth - margin, y, { align: "right" });
+    }
+    y += 20;
+  };
+
+  doc.setFillColor(10, 14, 39);
+  doc.rect(0, 0, pageWidth, 122, "F");
+  doc.setFillColor(20, 52, 203);
+  doc.rect(0, 118, pageWidth, 4, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(23);
+  doc.setTextColor(255, 255, 255);
+  doc.text("VISA | MAYA", margin, 44);
+  doc.setFontSize(17);
+  doc.text("Procurement run summary", margin, 75);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(178, 188, 225);
+  doc.text(pdfSafe(`${run.scenario.businessType} | ${run.id} | ${run.orders.length} captured orders`), margin, 96);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(75, 226, 171);
+  doc.text("RECONCILED - INSIDE HARD CAP", pageWidth - margin, 43, { align: "right" });
+  y = 150;
+
+  const metrics = [
+    ["APPROVED", run.budget],
+    ["CAPTURED", run.totalSpent],
+    ["REMAINING", run.remaining],
+    ["REALLOCATED", run.totalReallocated],
+  ] as const;
+  const metricGap = 6;
+  const metricWidth = (contentWidth - metricGap * 3) / 4;
+  metrics.forEach(([label, value], index) => {
+    const x = margin + index * (metricWidth + metricGap);
+    doc.setFillColor(245, 247, 253);
+    doc.setDrawColor(221, 226, 241);
+    doc.rect(x, y, metricWidth, 55, "FD");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7);
+    doc.setTextColor(101, 111, 145);
+    doc.text(label, x + 10, y + 17);
+    doc.setFontSize(14);
+    doc.setTextColor(index === 3 ? 177 : 20, index === 3 ? 126 : 32, index === 3 ? 0 : 75);
+    doc.text(money(value), x + 10, y + 40);
+  });
+  y += 82;
+
+  sectionTitle("Run controls", `${run.quoteCount} quotes evaluated`);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(62, 70, 99);
+  doc.text(`Allocated before run: ${money(run.allocatedTotal)}`, margin, y);
+  doc.text(`Flexible reserve: ${money(run.unallocatedReserve)}`, margin + 176, y);
+  doc.text(`Fees and tax: ${money(run.totalFees)}`, margin + 340, y);
+  y += 16;
+  doc.text(`Discounts and credits: -${money(run.totalDiscounts)}`, margin, y);
+  doc.text(`Budget utilization: ${Math.round((run.totalSpent / run.budget) * 100)}%`, margin + 176, y);
+  doc.text(`Stock substitutions: ${run.orders.filter(order => order.substituted).length}`, margin + 340, y);
+  y += 32;
+
+  sectionTitle("Order ledger", "Landed cost by category");
+  run.orders.forEach(order => {
+    const outcome = order.upgraded
+      ? "UPGRADED"
+      : order.substituted
+        ? "SUBSTITUTED"
+        : order.capturedTotal < order.allocation
+          ? `${money(order.allocation - order.capturedTotal)} UNDER`
+          : order.capturedTotal > order.allocation
+            ? `${money(order.capturedTotal - order.allocation)} REALLOCATED`
+            : "WITHIN ENVELOPE";
+    const blockHeight = 78 + order.lineItems.length * 13;
+    ensureSpace(blockHeight + 12);
+    doc.setFillColor(order.upgraded ? 255 : 248, order.upgraded ? 249 : 249, order.upgraded ? 229 : 253);
+    doc.setDrawColor(order.upgraded ? 237 : 225, order.upgraded ? 206 : 229, order.upgraded ? 104 : 241);
+    doc.rect(margin, y, contentWidth, blockHeight, "FD");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(10, 14, 39);
+    doc.text(pdfSafe(order.categoryName), margin + 12, y + 19);
+    doc.setFontSize(10);
+    doc.text(money(order.capturedTotal), pageWidth - margin - 12, y + 19, { align: "right" });
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(75, 84, 115);
+    doc.text(pdfSafe(order.selectedProduct), margin + 12, y + 36, { maxWidth: contentWidth - 160 });
+    doc.text(pdfSafe(order.selectedMerchant), margin + 12, y + 50);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7);
+    doc.setTextColor(order.substituted ? 191 : order.upgraded ? 170 : 38, order.substituted ? 60 : order.upgraded ? 121 : 73, order.substituted ? 151 : order.upgraded ? 0 : 165);
+    doc.text(outcome, pageWidth - margin - 12, y + 49, { align: "right" });
+    doc.setDrawColor(226, 230, 241);
+    doc.line(margin + 12, y + 59, pageWidth - margin - 12, y + 59);
+    let lineY = y + 74;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    order.lineItems.forEach(item => {
+      doc.setTextColor(86, 94, 121);
+      doc.text(pdfSafe(item.label), margin + 12, lineY, { maxWidth: contentWidth - 120 });
+      doc.setTextColor(item.amount < 0 ? 166 : 62, item.amount < 0 ? 119 : 70, item.amount < 0 ? 0 : 99);
+      doc.text(item.amount < 0 ? `-${money(Math.abs(item.amount))}` : money(item.amount), pageWidth - margin - 12, lineY, { align: "right" });
+      lineY += 13;
+    });
+    y += blockHeight + 10;
+  });
+
+  sectionTitle("Reallocation trail", `${run.transfers.length} transfers`);
+  if (run.transfers.length === 0) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(75, 84, 115);
+    doc.text("No transfers were required; every order fit its original category envelope.", margin, y);
+    y += 22;
+  } else {
+    run.transfers.forEach(transfer => {
+      ensureSpace(20);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.setTextColor(75, 84, 115);
+      doc.text(pdfSafe(`${transfer.from} -> ${transfer.to}`), margin, y);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(171, 122, 0);
+      doc.text(money(transfer.amount), pageWidth - margin, y, { align: "right" });
+      doc.setDrawColor(232, 235, 244);
+      doc.line(margin, y + 7, pageWidth - margin, y + 7);
+      y += 20;
+    });
+  }
+
+  ensureSpace(48);
+  y += 8;
+  doc.setFillColor(10, 14, 39);
+  doc.rect(margin, y, contentWidth, 40, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.setTextColor(255, 255, 255);
+  doc.text(`Final captured total: ${money(run.totalSpent)}`, margin + 12, y + 17);
+  doc.setTextColor(75, 226, 171);
+  doc.text(`${money(run.remaining)} remaining`, pageWidth - margin - 12, y + 17, { align: "right" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(173, 183, 219);
+  doc.text("All captures reconciled to the approved hard budget boundary.", margin + 12, y + 30);
+
+  const pageCount = doc.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page += 1) {
+    doc.setPage(page);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(133, 141, 166);
+    doc.text(`Visa Maya | ${run.id}`, margin, pageHeight - 22);
+    doc.text(`Page ${page} of ${pageCount}`, pageWidth - margin, pageHeight - 22, { align: "right" });
+  }
+
+  const fileName = `visa-maya-${run.scenario.id}-${run.id.toLowerCase()}.pdf`;
+  doc.save(fileName);
+}
+
+function SummaryScreen({ run, onRestart }: { run: ProcurementRun; onRestart: () => void }) {
+  const [pdfDownloading, setPdfDownloading] = useState(false);
+  const scenario = run.scenario;
+  const chartData = run.orders.map(order => ({ name: order.categoryName.split(" ")[0], allocated: order.allocation, spent: order.capturedTotal }));
+  const donut = [{ name: "Captured", value: run.totalSpent }, { name: "Remaining", value: run.remaining }];
+  const upgradeOrder = run.orders.find(order => order.upgraded);
+  const substitutionCount = run.orders.filter(order => order.substituted).length;
+  const handlePdfDownload = async () => {
+    setPdfDownloading(true);
+    try {
+      await downloadRunSummary(run);
+    } finally {
+      setPdfDownloading(false);
+    }
+  };
+  return <motion.section {...screenMotion} className="workspace-section mx-auto min-h-screen max-w-[1440px] px-5 pb-16 pt-28 sm:px-8">
+    <div className="grid items-end gap-6 border-b border-white/10 pb-7 lg:grid-cols-[1fr_auto]"><div><div className="section-kicker"><BadgeCheck className="h-3.5 w-3.5" /> Procurement dashboard · {run.id}</div><h1 className="workspace-title mt-4">Run summary.</h1><p className="workspace-lede mt-3 max-w-2xl">{scenario.businessType} · {run.orders.length} orders captured from {run.quoteCount} evaluated quotes, all reconciled to the approved envelope.</p></div><div className="flex items-center gap-4 border border-emerald-400/20 bg-emerald-400/[.06] px-5 py-4"><motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 200, damping: 15 }} className="summary-seal"><span className="summary-seal-ring" /><Check className="relative h-7 w-7 text-[#F7B500]" /></motion.div><div><p className="font-mono text-[9px] font-bold uppercase tracking-[.18em] text-emerald-300">Reconciled</p><p className="mt-1 text-sm font-semibold text-white">Inside hard cap</p></div></div></div>
+    <div className="mt-4 flex justify-end"><Button variant="outline" onClick={() => void handlePdfDownload()} disabled={pdfDownloading} className="border-white/15 bg-white/[.06] text-white hover:border-[#F7B500]/35 hover:bg-[#F7B500]/10 hover:text-white">{pdfDownloading ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin text-[#F7B500]" /> : <Download className="mr-2 h-4 w-4 text-[#F7B500]" />}{pdfDownloading ? "Preparing PDF…" : "Download PDF summary"}</Button></div>
+    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[
+      { label: "Approved envelope", value: run.budget, tone: "text-white" },
+      { label: "Captured", value: run.totalSpent, tone: "text-[#8FA5FF]" },
+      { label: "Remaining", value: run.remaining, tone: "text-emerald-300" },
+      { label: "Reallocated", value: run.totalReallocated, tone: "text-[#F7B500]" },
+    ].map(metric => <Card key={metric.label} className="shadow-none"><CardContent className="p-5"><p className="operational-label">{metric.label}</p><p className={cn("mt-2 text-2xl font-semibold tracking-[-.035em]", metric.tone)}>{money(metric.value)}</p></CardContent></Card>)}</div>
+    <div className="mt-5 grid gap-5 lg:grid-cols-[.72fr_1.28fr]">
+      <Card><CardHeader><CardTitle>Budget utilization</CardTitle><CardDescription>Captured total against the hard cap</CardDescription></CardHeader><CardContent><div className="relative mx-auto h-60"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={donut} dataKey="value" innerRadius={72} outerRadius={98} startAngle={90} endAngle={-270} strokeWidth={0} isAnimationActive={false}>{donut.map((_, i) => <Cell key={i} fill={i === 0 ? "#3A5BFF" : "#293154"} />)}</Pie></PieChart></ResponsiveContainer><div className="absolute inset-0 grid place-content-center text-center"><span className="text-xs text-white/40">Captured</span><strong className="text-3xl tracking-tight text-white">{money(run.totalSpent)}</strong><span className="font-mono text-[9px] font-bold uppercase tracking-wider text-emerald-300">{Math.round((run.totalSpent / run.budget) * 100)}% utilized</span></div></div><div className="flex items-center justify-between border-t border-white/[.08] pt-4 text-xs"><span className="text-white/40">Fees and tax</span><strong className="text-white/70">{money(run.totalFees)}</strong><span className="text-white/40">Discounts and credits</span><strong className="text-[#F7B500]">−{money(run.totalDiscounts)}</strong></div></CardContent></Card>
       <Card className="overflow-hidden"><CardHeader><CardTitle>Category spend</CardTitle><CardDescription>Allocation compared with final captured price</CardDescription></CardHeader><CardContent className="h-[310px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={chartData} margin={{ top: 10, right: 5, left: -15, bottom: 5 }}><CartesianGrid strokeDasharray="3 5" vertical={false} stroke="#27315B" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#7F8AB5" }} /><YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: "#66719D" }} tickFormatter={v => `$${v / 1000}k`} /><Tooltip cursor={{ fill: "rgba(58,91,255,.08)" }} formatter={(value: number) => money(value)} contentStyle={{ borderRadius: 7, border: "1px solid rgba(255,255,255,.1)", background: "#111634", color: "#FFFFFF", boxShadow: "0 12px 30px rgba(0,0,0,.35)", fontSize: 12 }} /><Bar dataKey="allocated" fill="#33406E" radius={[3, 3, 0, 0]} isAnimationActive={false} /><Bar dataKey="spent" fill="#3A5BFF" radius={[3, 3, 0, 0]} isAnimationActive={false} /></BarChart></ResponsiveContainer></CardContent></Card>
     </div>
-    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .35 }} className="redirect-dossier mt-5 overflow-hidden rounded-[9px] border border-[#F7B500]/30 bg-[#111634]/90 shadow-[0_34px_70px_-42px_rgba(0,0,0,.9)] backdrop-blur-xl"><div className="flex flex-col items-start justify-between gap-5 px-6 py-6 text-white sm:flex-row sm:items-center"><div className="flex items-start gap-4"><div className="grid h-11 w-11 shrink-0 place-items-center rounded-[7px] border border-[#F7B500]/25 bg-[#F7B500]/10"><ArrowRightLeft className="h-5 w-5 text-[#F7B500]" /></div><div><p className="workspace-card-heading text-white">{money(redirect)} automatically redirected</p><p className="mt-1 text-sm text-white/55">Upgraded your {target.name} to the {target.upgradedProductName}.</p>{scenario.checkoutCredit && <p className="mt-2 font-mono text-[10px] text-[#F7B500]/80">Includes a {money(scenario.checkoutCredit)} bundled checkout credit to preserve the hard cap.</p>}</div></div><BadgeCheck className="h-7 w-7 text-emerald-400" /></div></motion.div>
-    <Card className="mt-5"><CardHeader><CardTitle>Final purchase plan</CardTitle><CardDescription>Every allocation, capture, and product in one place</CardDescription></CardHeader><CardContent><div className="overflow-x-auto"><table className="w-full min-w-[680px] text-left"><thead><tr className="border-b border-white/[.08] text-[10px] font-bold uppercase tracking-wider text-white/40"><th className="pb-3">Category</th><th className="pb-3">Allocated</th><th className="pb-3">Spent</th><th className="pb-3">Product secured</th><th className="pb-3 text-right">Result</th></tr></thead><tbody>{scenario.categories.map((c, i) => { const Icon = icons[c.icon]; const paid = getPaidPrice(scenario, c); return <tr key={c.name} className={cn("border-b border-white/[.07] last:border-0", c.isUpgradeTarget && "bg-[#F7B500]/[.035]")}><td className="py-4"><div className="flex items-center gap-3"><div className="grid h-8 w-8 place-items-center rounded-[6px] bg-[#3A5BFF]/10 text-[#8FA5FF]"><Icon className="h-3.5 w-3.5" /></div><span className="text-sm font-semibold text-white">{c.name}</span></div></td><td className="py-4 text-sm text-white/50">{money(allocations[i])}</td><td className="py-4 text-sm font-semibold text-white">{money(paid)}</td><td className="py-4 text-sm text-white/60">{c.isUpgradeTarget ? c.upgradedProductName : c.productName}{scenario.checkoutCredit && c.isUpgradeTarget && <span className="ml-1 text-xs text-white/30">({money(c.upgradedPrice!)} list)</span>}</td><td className="py-4 text-right"><span className={cn("rounded-[4px] px-2.5 py-1 font-mono text-[8px] font-bold uppercase tracking-wider", c.isUpgradeTarget ? "bg-[#F7B500]/10 text-[#F7B500]" : paid < allocations[i] ? "bg-emerald-400/10 text-emerald-300" : "bg-white/[.05] text-white/45")}>{c.isUpgradeTarget ? "Upgraded" : paid < allocations[i] ? `${money(allocations[i] - paid)} under` : "On budget"}</span></td></tr>; })}</tbody></table></div></CardContent></Card>
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .35 }} className="redirect-dossier mt-5 overflow-hidden border border-[#F7B500]/25 bg-[#111634]/90 shadow-[0_34px_70px_-42px_rgba(0,0,0,.9)] backdrop-blur-xl"><div className="grid gap-5 px-6 py-6 text-white lg:grid-cols-[.78fr_1.22fr] lg:items-center"><div className="flex items-start gap-4"><div className="grid h-11 w-11 shrink-0 place-items-center border border-[#F7B500]/25 bg-[#F7B500]/10"><ArrowRightLeft className="h-5 w-5 text-[#F7B500]" /></div><div><p className="workspace-card-heading text-white">{run.transfers.length ? `${money(run.totalReallocated)} dynamically reallocated` : "No reallocation required"}</p><p className="mt-1 text-sm leading-6 text-white/55">{upgradeOrder ? `Surplus unlocked the ${upgradeOrder.selectedProduct} while preserving the hard cap.` : "Every captured order fit inside its original category envelope."}</p><p className="mt-2 font-mono text-[9px] uppercase tracking-wider text-white/30">{substitutionCount} stock substitution{substitutionCount === 1 ? "" : "s"} · {money(run.totalDiscounts)} discounts and credits</p></div></div><div className="grid gap-2 sm:grid-cols-2">{run.transfers.slice(0, 4).map((transfer, index) => <div key={`${transfer.from}-${transfer.to}-${index}`} className="border border-white/[.08] bg-white/[.035] px-3 py-2.5"><div className="flex items-center gap-2 text-[10px]"><span className="truncate text-white/45">{transfer.from}</span><ArrowRight className="h-3 w-3 shrink-0 text-[#F7B500]" /><span className="truncate text-white/70">{transfer.to}</span></div><p className="mt-1 font-mono text-[10px] font-bold text-[#F7B500]">{money(transfer.amount)}</p></div>)}</div></div></motion.div>
+    <Card className="mt-5"><CardHeader className="px-6 sm:px-8"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><CardTitle>Order ledger</CardTitle><CardDescription className="mt-1">Allocation, landed capture, merchant, and outcome</CardDescription></div><span className="font-mono text-[9px] font-bold uppercase tracking-[.14em] text-white/30">Run {run.id} · {run.orders.length} captures</span></div></CardHeader><CardContent className="px-6 pb-6 sm:px-8"><div className="overflow-x-auto"><table className="w-full min-w-[780px] text-left"><thead><tr className="border-b border-white/[.08] text-[10px] font-bold uppercase tracking-wider text-white/40"><th className="pb-3 pl-2">Category</th><th className="pb-3">Allocated</th><th className="pb-3">Captured</th><th className="pb-3">Product / merchant</th><th className="pb-3 pr-2 text-right">Outcome</th></tr></thead><tbody>{run.orders.map(order => { const Icon = icons[order.icon]; const delta = order.allocation - order.capturedTotal; const result = order.upgraded ? "Upgraded" : order.substituted ? "Substituted" : delta > 0 ? `${money(delta)} under` : delta < 0 ? `${money(-delta)} reallocated` : "Within envelope"; return <tr key={order.categoryName} className={cn("border-b border-white/[.07] last:border-0", order.upgraded && "bg-[#F7B500]/[.035]", order.substituted && "bg-[#FF8BD8]/[.025]")}><td className="py-4 pl-2"><div className="flex items-center gap-3"><div className="grid h-8 w-8 place-items-center bg-[#3A5BFF]/10 text-[#8FA5FF]"><Icon className="h-3.5 w-3.5" /></div><span className="text-sm font-semibold text-white">{order.categoryName}</span></div></td><td className="py-4 text-sm text-white/50">{money(order.allocation)}</td><td className="py-4 text-sm font-semibold text-white">{money(order.capturedTotal)}</td><td className="py-4"><p className="max-w-[360px] truncate text-sm text-white/65">{order.selectedProduct}</p><p className="mt-1 text-[10px] text-white/30">{order.selectedMerchant}</p></td><td className="py-4 pr-2 text-right"><span className={cn("px-2.5 py-1 font-mono text-[8px] font-bold uppercase tracking-wider", order.upgraded ? "bg-[#F7B500]/10 text-[#F7B500]" : order.substituted ? "bg-[#FF8BD8]/10 text-[#FF8BD8]" : delta > 0 ? "bg-emerald-400/10 text-emerald-300" : delta < 0 ? "bg-[#3A5BFF]/15 text-[#8FA5FF]" : "bg-white/[.05] text-white/45")}>{result}</span></td></tr>; })}</tbody></table></div></CardContent></Card>
     <div className="mt-8 flex flex-col items-center justify-between gap-5 border-t border-white/10 pt-7 text-center sm:flex-row sm:text-left"><div><p className="font-semibold text-white">One plan. Five agents. Zero budget overruns.</p><p className="mt-1 text-sm text-white/45">Visa Maya turned spend controls into better business outcomes.</p></div><Button variant="outline" size="lg" onClick={onRestart} className="border-white/15 bg-white/[.07] text-white hover:border-white/25 hover:bg-white/[.12] hover:text-white"><RotateCcw className="mr-2 h-4 w-4" /> Start another plan</Button></div>
   </motion.section>;
 }
@@ -374,15 +595,17 @@ export default function App() {
   const [prompt, setPrompt] = useState(scenarios[0].prefilledPrompt);
   const [allocations, setAllocations] = useState(scenarios[0].categories.map(c => c.estimatedAllocation));
   const [authIntent, setAuthIntent] = useState<AuthIntent>("pass");
+  const [run, setRun] = useState<ProcurementRun | null>(null);
   const scenarioIndex = scenarios.findIndex(item => item.id === scenario.id);
-  const selectScenario = (next: Scenario) => { setScenario(next); setPrompt(next.prefilledPrompt); setAllocations(next.categories.map(c => c.estimatedAllocation)); };
+  const selectScenario = (next: Scenario) => { setScenario(next); setPrompt(next.prefilledPrompt); setAllocations(next.categories.map(c => c.estimatedAllocation)); setRun(null); };
   const cycleScenario = (direction: -1 | 1) => { const nextIndex = (scenarioIndex + direction + scenarios.length) % scenarios.length; selectScenario(scenarios[nextIndex]); };
   const reset = () => { selectScenario(scenarios[0]); setAuthIntent("pass"); setScreen("landing"); };
+  const startPurchasing = () => { setRun(createProcurementRun(scenario, allocations)); setScreen("live"); };
   return <AmbientShell showReset={screen !== "landing"} onReset={reset}><AnimatePresence mode="wait">
     {screen === "landing" && <LandingScreen key="landing" scenario={scenario} prompt={prompt} setPrompt={setPrompt} onCycle={cycleScenario} authIntent={authIntent} setAuthIntent={setAuthIntent} onSubmit={() => setScreen("auth")} />}
     {screen === "auth" && <AuthScreen key="auth" intent={authIntent} onSuccess={() => setScreen("priority")} />}
-    {screen === "priority" && <PriorityScreen key="priority" scenario={scenario} allocations={allocations} setAllocations={setAllocations} onContinue={() => setScreen("live")} />}
-    {screen === "live" && <LiveScreen key="live" scenario={scenario} allocations={allocations} onSummary={() => setScreen("summary")} />}
-    {screen === "summary" && <SummaryScreen key="summary" scenario={scenario} allocations={allocations} onRestart={reset} />}
+    {screen === "priority" && <PriorityScreen key="priority" scenario={scenario} allocations={allocations} setAllocations={setAllocations} onContinue={startPurchasing} />}
+    {screen === "live" && run && <LiveScreen key="live" run={run} onSummary={() => setScreen("summary")} />}
+    {screen === "summary" && run && <SummaryScreen key="summary" run={run} onRestart={reset} />}
   </AnimatePresence></AmbientShell>;
 }
